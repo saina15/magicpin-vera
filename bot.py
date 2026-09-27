@@ -75,32 +75,43 @@ def add_context(data: dict[str, Any]):
         "context_id": context_id,
         "version": version
     }
+
 def create_message(trigger, merchant, category, customer=None):
 
     trigger_kind = trigger.get("kind", "")
-    payload = trigger.get("payload", {})
+    payload = trigger.get("payload", {}) or {}
 
-    merchant_name = merchant.get("identity", {}).get(
+    merchant_identity = merchant.get("identity", {}) or {}
+
+    merchant_name = merchant_identity.get(
         "name",
         "your business"
     )
 
-    owner_name = merchant.get("identity", {}).get(
+    owner_name = merchant_identity.get(
         "owner_first_name",
         ""
     )
 
     category_name = category.get(
         "display_name",
-        merchant.get("category_slug", "your category")
+        merchant.get("category_slug", "business")
     )
 
-    # Customer-facing message
+    greeting = f"{owner_name}, " if owner_name else ""
+
+    # ---------------------------------------------------------
+    # CUSTOMER-FACING MESSAGES
+    # ---------------------------------------------------------
+
     if customer:
 
-        customer_name = customer.get(
-            "identity", {}
-        ).get("name", "there")
+        customer_identity = customer.get("identity", {}) or {}
+
+        customer_name = customer_identity.get(
+            "name",
+            "there"
+        )
 
         if trigger_kind == "recall_due":
 
@@ -116,79 +127,216 @@ def create_message(trigger, merchant, category, customer=None):
             )
 
         return (
-            f"Hi {customer_name}, "
-            f"{merchant_name} has a quick update for you. "
-            f"Would you like to know more?"
+            f"Hi {customer_name}, {merchant_name} has an update "
+            f"relevant to you. Would you like to know more?"
         )
 
-    # Merchant-facing messages
-
-    greeting = f"{owner_name}, " if owner_name else ""
+    # ---------------------------------------------------------
+    # RESEARCH
+    # ---------------------------------------------------------
 
     if trigger_kind == "research_digest":
 
-        return (
-            f"{greeting}a new {category_name} research update is worth a look. "
-            f"I found a relevant item for your practice. "
-            f"Want me to share the key takeaway?"
+        topic = (
+            payload.get("topic")
+            or payload.get("title")
+            or payload.get("subject")
+            or "a new market update"
         )
 
-    if trigger_kind == "regulation_change":
-
-        deadline = payload.get("deadline_iso", "")
-
-        return (
-            f"{greeting}there's a relevant regulatory update for your "
-            f"{category_name.lower()} practice. "
-            f"The current deadline is {deadline}. "
-            f"Want me to summarise what needs checking?"
+        takeaway = (
+            payload.get("takeaway")
+            or payload.get("summary")
+            or payload.get("key_takeaway")
         )
 
-    if trigger_kind == "perf_dip":
-
-        metric = payload.get("metric", "performance")
-        delta = payload.get("delta_pct")
-
-        if delta is not None:
-            percent = round(abs(delta) * 100)
-
+        if takeaway:
             return (
-                f"{greeting}your {metric} is down about {percent}% "
-                f"in the latest window. "
-                f"Want me to suggest a couple of things to investigate?"
+                f"{greeting}there's a new {category_name} update on "
+                f"{topic}. The key takeaway is: {takeaway}. "
+                f"Want me to break down what it could mean for {merchant_name}?"
             )
 
         return (
-            f"{greeting}there's a recent dip in your {metric}. "
-            f"Want me to look at the likely drivers?"
+            f"{greeting}there's a new {category_name} update on "
+            f"{topic}. Want me to share the key takeaway?"
         )
+
+    # ---------------------------------------------------------
+    # REGULATION
+    # ---------------------------------------------------------
+
+    if trigger_kind == "regulation_change":
+
+        deadline = payload.get("deadline_iso")
+        regulation = (
+            payload.get("regulation")
+            or payload.get("title")
+            or payload.get("change")
+            or "a regulatory requirement"
+        )
+
+        message = (
+            f"{greeting}there's a relevant regulatory update for your "
+            f"{category_name} business: {regulation}"
+        )
+
+        if deadline:
+            message += f" The current deadline is {deadline}."
+
+        message += " Want me to summarise the action items?"
+
+        return message
+
+    # ---------------------------------------------------------
+    # PERFORMANCE DIP
+    # ---------------------------------------------------------
+
+    if trigger_kind == "perf_dip":
+
+        metric = payload.get(
+            "metric",
+            "performance"
+        )
+
+        delta = payload.get("delta_pct")
+
+        current_value = (
+            payload.get("current_value")
+            or payload.get("current")
+        )
+
+        previous_value = (
+            payload.get("previous_value")
+            or payload.get("previous")
+        )
+
+        peer_value = (
+            payload.get("peer_median")
+            or payload.get("peer_average")
+            or payload.get("benchmark")
+        )
+
+        message = f"{greeting}your {metric}"
+
+        if delta is not None:
+            try:
+                percent = abs(float(delta) * 100)
+                message += f" is down about {percent:.0f}%"
+            except (TypeError, ValueError):
+                message += " has declined"
+        else:
+            message += " has declined"
+
+        if current_value is not None and previous_value is not None:
+            message += (
+                f" from {previous_value} to {current_value}"
+            )
+
+        if peer_value is not None:
+            message += (
+                f", compared with a peer benchmark of {peer_value}"
+            )
+
+        message += " in the latest window."
+
+        return (
+            message
+            + " Want me to look at the likely drivers and suggest "
+              "a couple of actions?"
+        )
+
+    # ---------------------------------------------------------
+    # RENEWAL
+    # ---------------------------------------------------------
 
     if trigger_kind == "renewal_due":
 
+        plan = payload.get(
+            "plan",
+            "subscription"
+        )
+
         days = payload.get("days_remaining")
 
+        price = (
+            payload.get("price")
+            or payload.get("amount")
+        )
+
+        message = (
+            f"{greeting}your {plan} subscription is coming up for renewal"
+        )
+
+        if days is not None:
+            message += f" in {days} days"
+
+        if price is not None:
+            message += f" at {price}"
+
+        message += "."
+
         return (
-            f"{greeting}your {payload.get('plan', 'plan')} subscription "
-            f"is coming up for renewal"
-            + (f" in {days} days." if days else ".")
+            message
             + " Want me to walk you through the renewal details?"
         )
 
+    # ---------------------------------------------------------
+    # FESTIVAL
+    # ---------------------------------------------------------
+
     if trigger_kind == "festival_upcoming":
 
-        festival = payload.get("festival", "upcoming festival")
+        festival = payload.get(
+            "festival",
+            "the upcoming festival"
+        )
 
         return (
             f"{greeting}{festival} is coming up. "
-            f"Want me to suggest a simple campaign idea for "
-            f"your {category_name.lower()} business?"
+            f"For your {category_name} business, this could be a useful "
+            f"moment to plan a targeted campaign. "
+            f"Want me to suggest a simple campaign idea?"
         )
 
-    # Generic fallback
+    # ---------------------------------------------------------
+    # SPIKE / POSITIVE PERFORMANCE
+    # ---------------------------------------------------------
+
+    if trigger_kind == "perf_spike":
+
+        metric = payload.get(
+            "metric",
+            "performance"
+        )
+
+        delta = payload.get("delta_pct")
+
+        if delta is not None:
+            try:
+                percent = abs(float(delta) * 100)
+                return (
+                    f"{greeting}your {metric} is up about "
+                    f"{percent:.0f}% in the latest window. "
+                    f"Want me to look at what may be driving the increase "
+                    f"and how you could build on it?"
+                )
+            except (TypeError, ValueError):
+                pass
+
+        return (
+            f"{greeting}your {metric} has improved in the latest window. "
+            f"Want me to look at the likely drivers?"
+        )
+
+    # ---------------------------------------------------------
+    # GENERIC FALLBACK
+    # ---------------------------------------------------------
+
     return (
-        f"{greeting}there's a new update relevant to "
-        f"your {category_name.lower()} business. "
-        f"Want me to take a closer look?"
+        f"{greeting}there's a new update relevant to your "
+        f"{category_name} business. "
+        f"Want me to look at the specific details and next steps?"
     )
 @app.post("/v1/tick")
 def tick(data: dict[str, Any]):
